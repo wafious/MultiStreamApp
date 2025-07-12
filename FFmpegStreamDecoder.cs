@@ -1,6 +1,7 @@
 ﻿using FFmpeg.AutoGen;
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
@@ -12,7 +13,93 @@ namespace MultiStreamApp
 {
     public static unsafe class FFmpegStreamDecoder
     {
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct WAVEFORMATEX
+        {
+            public ushort wFormatTag;
+            public ushort nChannels;
+            public uint nSamplesPerSec;
+            public uint nAvgBytesPerSec;
+            public ushort nBlockAlign;
+            public ushort wBitsPerSample;
+            public ushort cbSize;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct WAVEHDR
+        {
+            public IntPtr lpData;
+            public uint dwBufferLength;
+            public uint dwBytesRecorded;
+            public IntPtr dwUser;
+            public uint dwFlags;
+            public uint dwLoops;
+            public IntPtr lpNext;
+            public IntPtr reserved;
+        }
+
+        public class NativeWaveOut
+        {
+            [DllImport("winmm.dll")]
+            public static extern int waveOutOpen(out IntPtr hWaveOut, int uDeviceID, ref WAVEFORMATEX lpFormat, IntPtr dwCallback, IntPtr dwInstance, uint dwFlags);
+
+            [DllImport("winmm.dll")]
+            public static extern int waveOutPrepareHeader(IntPtr hWaveOut, ref WAVEHDR lpWaveHdr, uint uSize);
+
+            [DllImport("winmm.dll")]
+            public static extern int waveOutWrite(IntPtr hWaveOut, ref WAVEHDR lpWaveHdr, uint uSize);
+
+            [DllImport("winmm.dll")]
+            public static extern int waveOutUnprepareHeader(IntPtr hWaveOut, ref WAVEHDR lpWaveHdr, uint uSize);
+
+            [DllImport("winmm.dll")]
+            public static extern int waveOutClose(IntPtr hWaveOut);
+        }
+        private static IntPtr hWaveOut = IntPtr.Zero;
+
+        private static void InitWaveOut(int sampleRate, int channels)
+        {
+            WAVEFORMATEX format = new WAVEFORMATEX
+            {
+                wFormatTag = 1, // PCM
+                nChannels = (ushort)channels,
+                nSamplesPerSec = (uint)sampleRate,
+                wBitsPerSample = 16,
+                nBlockAlign = (ushort)(channels * 2),
+                nAvgBytesPerSec = (uint)(sampleRate * channels * 2),
+                cbSize = 0
+            };
+
+            NativeWaveOut.waveOutOpen(out hWaveOut, -1, ref format, IntPtr.Zero, IntPtr.Zero, 0);
+        }
+
+        private static void PlayPCMBuffer(byte[] buffer)
+        {
+            GCHandle pinnedBuffer = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+            WAVEHDR header = new WAVEHDR
+            {
+                lpData = pinnedBuffer.AddrOfPinnedObject(),
+                dwBufferLength = (uint)buffer.Length,
+                dwFlags = 0,
+                dwLoops = 0
+            };
+
+            NativeWaveOut.waveOutPrepareHeader(hWaveOut, ref header, (uint)Marshal.SizeOf(typeof(WAVEHDR)));
+            NativeWaveOut.waveOutWrite(hWaveOut, ref header, (uint)Marshal.SizeOf(typeof(WAVEHDR)));
+
+            // Optional cleanup delay — real apps would track wave completion
+            Task.Delay(500).ContinueWith(_ =>
+            {
+                NativeWaveOut.waveOutUnprepareHeader(hWaveOut, ref header, (uint)Marshal.SizeOf(typeof(WAVEHDR)));
+                pinnedBuffer.Free();
+            });
+        }
+
+
+
         private static bool ffmpegRegistered = false;
+        private static MemoryStream wavData = new MemoryStream();
 
         public static void StartDecoding(string url, Dispatcher dispatcher, Action<WriteableBitmap> onFrameReady)
         {
@@ -26,17 +113,8 @@ namespace MultiStreamApp
             Task.Run(() =>
             {
                 AVFormatContext* formatContext = ffmpeg.avformat_alloc_context();
-                if (ffmpeg.avformat_open_input(&formatContext, url, null, null) != 0)
-                {
-                    Debug.WriteLine("❌ Failed to open input");
-                    return;
-                }
-
-                if (ffmpeg.avformat_find_stream_info(formatContext, null) < 0)
-                {
-                    Debug.WriteLine("❌ Failed to find stream info");
-                    return;
-                }
+                if (ffmpeg.avformat_open_input(&formatContext, url, null, null) != 0) return;
+                if (ffmpeg.avformat_find_stream_info(formatContext, null) < 0) return;
 
                 int videoStreamIndex = -1;
                 int audioStreamIndex = -1;
@@ -46,6 +124,7 @@ namespace MultiStreamApp
                 for (int i = 0; i < formatContext->nb_streams; i++)
                 {
                     var codecpar = formatContext->streams[i]->codecpar;
+
                     if (codecpar->codec_type == AVMediaType.AVMEDIA_TYPE_VIDEO && videoStreamIndex == -1)
                     {
                         videoStreamIndex = i;
@@ -61,46 +140,51 @@ namespace MultiStreamApp
                         audioCodecContext = ffmpeg.avcodec_alloc_context3(codec);
                         ffmpeg.avcodec_parameters_to_context(audioCodecContext, codecpar);
                         ffmpeg.avcodec_open2(audioCodecContext, codec, null);
+                        InitWaveOut(audioCodecContext->sample_rate, audioCodecContext->ch_layout.nb_channels);
+                        //ffmpeg.avcodec_flush_buffers(audioCodecContext);
+
                     }
                 }
 
-                if (videoStreamIndex == -1 || videoCodecContext == null)
-                {
-                    Debug.WriteLine("❌ No video stream found");
-                    return;
-                }
-
-                AVFrame* frame = ffmpeg.av_frame_alloc();
                 AVPacket* packet = ffmpeg.av_packet_alloc();
-                SwsContext* swsContext = ffmpeg.sws_getContext(
-                    videoCodecContext->width, videoCodecContext->height, videoCodecContext->pix_fmt,
-                    videoCodecContext->width, videoCodecContext->height, AVPixelFormat.AV_PIX_FMT_BGR24,
-                    ffmpeg.SWS_BICUBIC, null, null, null);
+                AVFrame* frame = ffmpeg.av_frame_alloc();
+                SwsContext* swsContext = null;
+                byte[] buffer = null;
 
-                byte[] buffer = new byte[videoCodecContext->width * videoCodecContext->height * 3];
-                fixed (byte* pBuffer = buffer)
+                int wavSampleRate = audioCodecContext->sample_rate;
+                const int wavChannels = 2;
+                wavData = new MemoryStream();
+
+                while (ffmpeg.av_read_frame(formatContext, packet) >= 0)
                 {
-                    byte_ptrArray4 dstData = new byte_ptrArray4();
-                    int_array4 dstLinesize = new int_array4();
-                    dstData[0] = pBuffer;
-                    dstLinesize[0] = videoCodecContext->width * 3;
-
-                    while (ffmpeg.av_read_frame(formatContext, packet) >= 0)
+                    if (packet->stream_index == videoStreamIndex)
                     {
-                        if (packet->stream_index == videoStreamIndex)
+                        if (videoCodecContext == null) continue;
+
+                        if (ffmpeg.avcodec_send_packet(videoCodecContext, packet) == 0)
                         {
-                            if (ffmpeg.avcodec_send_packet(videoCodecContext, packet) == 0)
+                            while (ffmpeg.avcodec_receive_frame(videoCodecContext, frame) == 0)
                             {
-                                while (ffmpeg.avcodec_receive_frame(videoCodecContext, frame) == 0)
+                                if (swsContext == null)
                                 {
+                                    swsContext = ffmpeg.sws_getContext(
+                                        videoCodecContext->width, videoCodecContext->height, videoCodecContext->pix_fmt,
+                                        videoCodecContext->width, videoCodecContext->height, AVPixelFormat.AV_PIX_FMT_BGR24,
+                                        ffmpeg.SWS_BILINEAR, null, null, null);
+
+                                    buffer = new byte[videoCodecContext->width * videoCodecContext->height * 3];
+                                }
+
+                                fixed (byte* pBuffer = buffer)
+                                {
+                                    byte_ptrArray4 dstData = new byte_ptrArray4();
+                                    int_array4 dstLinesize = new int_array4();
+                                    dstData[0] = pBuffer;
+                                    dstLinesize[0] = videoCodecContext->width * 3;
+
                                     ffmpeg.sws_scale(
-                                        swsContext,
-                                        frame->data,
-                                        frame->linesize,
-                                        0,
-                                        videoCodecContext->height,
-                                        dstData,
-                                        dstLinesize);
+                                        swsContext, frame->data, frame->linesize,
+                                        0, videoCodecContext->height, dstData, dstLinesize);
 
                                     int w = videoCodecContext->width;
                                     int h = videoCodecContext->height;
@@ -114,28 +198,35 @@ namespace MultiStreamApp
                                 }
                             }
                         }
-                        else if (packet->stream_index == audioStreamIndex && audioCodecContext != null)
-                        {
-                            if (ffmpeg.avcodec_send_packet(audioCodecContext, packet) == 0)
-                            {
-                                AVFrame* audioFrame = ffmpeg.av_frame_alloc();
-                                while (ffmpeg.avcodec_receive_frame(audioCodecContext, audioFrame) == 0)
-                                {
-                                    byte[] pcm = ResampleAudioFrame(audioFrame, audioCodecContext);
-                                    if (pcm != null)
-                                    {
-                                        // 🔊 You can write pcm to file or stream it here
-                                        Debug.WriteLine($"🎶 Decoded {pcm.Length} bytes of audio");
-                                    }
-                                }
-                                ffmpeg.av_frame_free(&audioFrame);
-                            }
-                        }
-
-                        ffmpeg.av_packet_unref(packet);
                     }
+                    else if (packet->stream_index == audioStreamIndex)
+                    {
+                        if (audioCodecContext == null) continue;
+
+                        if (ffmpeg.avcodec_send_packet(audioCodecContext, packet) == 0)
+                        {
+                            AVFrame* audioFrame = ffmpeg.av_frame_alloc();
+                            while (ffmpeg.avcodec_receive_frame(audioCodecContext, audioFrame) == 0)
+                            {
+                                byte[] pcm = ResampleToStereoS16(audioFrame, audioCodecContext);
+                                if (pcm != null) wavData.Write(pcm, 0, pcm.Length);
+                                if (pcm != null && pcm.Length > 0)
+                                {
+                                    PlayPCMBuffer(pcm);
+                                }
+
+
+                            }
+                            ffmpeg.av_frame_free(&audioFrame);
+                        }
+                    }
+
+                    ffmpeg.av_packet_unref(packet);
                 }
 
+                SaveWavFile("output.wav", wavData.ToArray(), wavSampleRate, wavChannels);
+
+                // Cleanup
                 ffmpeg.av_frame_free(&frame);
                 ffmpeg.av_packet_free(&packet);
                 ffmpeg.avcodec_free_context(&videoCodecContext);
@@ -145,7 +236,7 @@ namespace MultiStreamApp
             });
         }
 
-        private static unsafe byte[] ResampleAudioFrame(AVFrame* frame, AVCodecContext* ctx)
+        private static unsafe byte[] ResampleToStereoS16(AVFrame* frame, AVCodecContext* ctx)
         {
             if (ctx == null || frame == null) return null;
 
@@ -182,6 +273,27 @@ namespace MultiStreamApp
             ffmpeg.swr_free(&swr);
             ffmpeg.av_free(outBuffer);
             return output;
+        }
+
+        private static void SaveWavFile(string path, byte[] pcmData, int sampleRate, int channels)
+        {
+            using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
+            using var bw = new BinaryWriter(fs);
+            int byteRate = sampleRate * channels * 2;
+            bw.Write(System.Text.Encoding.ASCII.GetBytes("RIFF"));
+            bw.Write(36 + pcmData.Length);
+            bw.Write(System.Text.Encoding.ASCII.GetBytes("WAVE"));
+            bw.Write(System.Text.Encoding.ASCII.GetBytes("fmt "));
+            bw.Write(16);
+            bw.Write((short)1);
+            bw.Write((short)channels);
+            bw.Write(sampleRate);
+            bw.Write(byteRate);
+            bw.Write((short)(channels * 2));
+            bw.Write((short)16);
+            bw.Write(System.Text.Encoding.ASCII.GetBytes("data"));
+            bw.Write(pcmData.Length);
+            bw.Write(pcmData);
         }
     }
 }
