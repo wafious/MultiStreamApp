@@ -212,50 +212,6 @@ namespace MultiStreamApp
     public static unsafe class FFmpegStreamDecoder
     {
         private static bool ffmpegRegistered = false;
-        private static unsafe byte[] ResampleAudioFrame(AVFrame* frame, AVCodecContext* ctx)
-        {
-            if (ctx == null || frame == null) return null;
-
-            SwrContext* swr = ffmpeg.swr_alloc();
-            ffmpeg.av_opt_set_int(swr, "in_channel_layout", (long)ctx->ch_layout.u.mask, 0);
-            ffmpeg.av_opt_set_int(swr, "out_channel_layout", (long)ffmpeg.AV_CH_LAYOUT_STEREO, 0);
-            ffmpeg.av_opt_set_int(swr, "in_sample_rate", ctx->sample_rate, 0);
-            ffmpeg.av_opt_set_int(swr, "out_sample_rate", ctx->sample_rate, 0);
-            ffmpeg.av_opt_set_sample_fmt(swr, "in_sample_fmt", ctx->sample_fmt, 0);
-            ffmpeg.av_opt_set_sample_fmt(swr, "out_sample_fmt", AVSampleFormat.AV_SAMPLE_FMT_S16, 0);
-            ffmpeg.swr_init(swr);
-
-            int dstNbSamples = (int)ffmpeg.av_rescale_rnd(ffmpeg.swr_get_delay(swr, ctx->sample_rate) + frame->nb_samples,
-                                                     ctx->sample_rate, ctx->sample_rate, AVRounding.AV_ROUND_UP);
-
-            int bufferSize = ffmpeg.av_samples_get_buffer_size(null, 2, dstNbSamples, AVSampleFormat.AV_SAMPLE_FMT_S16, 1);
-            byte* outBuffer = (byte*)ffmpeg.av_malloc((ulong)bufferSize);
-
-            byte** outPtrs = stackalloc byte*[1];
-            outPtrs[0] = outBuffer;
-
-            byte* inPtr = frame->data[0];
-            
-                byte** inPtrs = stackalloc byte*[1];
-                inPtrs[0] = inPtr;
-
-                int converted = ffmpeg.swr_convert(swr, outPtrs, dstNbSamples, inPtrs, frame->nb_samples);
-                if (converted <= 0)
-                {
-                    ffmpeg.swr_free(&swr);
-                    ffmpeg.av_free(outBuffer);
-                    return null;
-                }
-
-                byte[] output = new byte[converted * 2 * ffmpeg.av_get_bytes_per_sample(AVSampleFormat.AV_SAMPLE_FMT_S16)];
-                Marshal.Copy((IntPtr)outBuffer, output, 0, output.Length);
-
-                ffmpeg.swr_free(&swr);
-                ffmpeg.av_free(outBuffer);
-                return output;
-            
-        }
-
         public static void StartDecoding(string url, Dispatcher dispatcher, Action<WriteableBitmap> onFrameReady)
         {
             if (!ffmpegRegistered)
