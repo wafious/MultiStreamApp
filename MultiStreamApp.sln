@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36127.28 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MultiStreamApp", "MultiStreamApp.csproj", "{13CA8E4B-DB85-44A8-B9B3-5478EEE3AE69}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{13CA8E4B-DB85-44A8-B9B3-5478EEE3AE69}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{13CA8E4B-DB85-44A8-B9B3-5478EEE3AE69}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{13CA8E4B-DB85-44A8-B9B3-5478EEE3AE69}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{13CA8E4B-DB85-44A8-B9B3-5478EEE3AE69}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {7C93B4E0-5427-46C6-99CE-E806A2493E56}
+	EndGlobalSection
+EndGlobal
