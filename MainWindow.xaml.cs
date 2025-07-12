@@ -11,6 +11,13 @@ namespace MultiStreamApp
     {
         private List<VideoStreamControl> streamControls = new();
 
+
+            string Url1 = "https://hdl-ws.zego.wakavideos.com/wakavideos/" +
+            "1053213993106153472_h264.flv";
+
+
+
+
         public MainWindow()
         {
             InitializeComponent();
@@ -19,25 +26,24 @@ namespace MultiStreamApp
 
         private void InitializeStreams()
         {
-            for (int i = 0; i < 3; i++)
-            {
-                var streamControl = new VideoStreamControl();
+            //for (int i = 0; i < 3; i++)
+            //{
+                var streamControl = new VideoStreamControl(Url1);
                 StreamGrid.Children.Add(streamControl);
                 streamControls.Add(streamControl);
-            }
+            //}
 
-            string Url1 = "https://hdl-ws.zego.wakavideos.com/wakavideos/1052880088180203520_h264.flv";
-            AddNewStream(Url1);
-            //string Url2 = "https://hdl-ws.zego.wakavideos.com/wakavideos/1052905148118999040_h264.flv";
-            //AddNewStream(Url2);
-            string Url3 = "https://hdl-ws.zego.wakavideos.com/wakavideos/1052905670829940736_h264.flv";
-            AddNewStream(Url3);
+            //AddNewStream(Url1);
+            ////string Url2 = "https://hdl-ws.zego.wakavideos.com/wakavideos/1052905148118999040_h264.flv";
+            ////AddNewStream(Url2);
+            //string Url3 = "https://hdl-ws.zego.wakavideos.com/wakavideos/1052905670829940736_h264.flv";
+            //AddNewStream(Url3);
 
         }
 
         public void AddNewStream(string streamUrl)
         {
-            var newControl = new VideoStreamControl();
+            var newControl = new VideoStreamControl(streamUrl);
             StreamGrid.Children.Add(newControl);
             streamControls.Add(newControl);
             newControl.LoadStream(streamUrl);
