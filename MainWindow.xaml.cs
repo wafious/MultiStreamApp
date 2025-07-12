@@ -12,8 +12,7 @@ namespace MultiStreamApp
         private List<VideoStreamControl> streamControls = new();
 
 
-        string Url1 = "https://hdl-ws.zego.wakavideos.com" +
-            "/wakavideos/1053243479851802624_h264.flv";
+        string Url1 = ".flv";
 
 
 
